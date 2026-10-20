@@ -1,18 +1,22 @@
-name: iOS Build
+
+name: Build Unsigned iOS IPA
 
 on:
-  push:
-    branches: ["main", "master"]
-  pull_request:
-    branches: ["main", "master"]
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
-      - name: Checkout
+      - name: Checkout Source
         uses: actions/checkout@v4
 
       - name: Select Xcode
@@ -20,31 +24,51 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Show Xcode version
-        run: xcodebuild -version
-
-      - name: Build for iOS Simulator
-        run: >-
-          xcodebuild
-          -project ThreeOneOSFive.xcodeproj
-          -scheme 3105
-          -configuration Debug
-          -sdk iphonesimulator
-          -destination 'generic/platform=iOS Simulator'
-          -derivedDataPath build/DerivedData
-          CODE_SIGNING_ALLOWED=NO
-          CODE_SIGNING_REQUIRED=NO
-          build
-
-      - name: Package simulator app
+      - name: Show Build Environment
         run: |
-          APP_PATH=$(find build/DerivedData/Build/Products -type d -name '3105.app' -print -quit)
-          test -n "$APP_PATH"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" build/3105-simulator.zip
+          xcodebuild -version
+          xcodebuild -list -project ThreeOneOSFive.xcodeproj
 
-      - name: Upload build artifact
+      - name: Build Unsigned iPhone App
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -project ThreeOneOSFive.xcodeproj \
+            -scheme 3105 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package Unsigned IPA
+        run: |
+          set -euo pipefail
+
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/3105.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: iPhone app build was not found."
+            find build/DerivedData/Build/Products -maxdepth 3 -print
+            exit 1
+          fi
+
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/3105.app
+
+          cd build
+          /usr/bin/zip -qry 3105-unsigned.ipa Payload
+
+          test -s 3105-unsigned.ipa
+
+      - name: Upload Unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: 3105-simulator-build
-          path: build/3105-simulator.zip
+          name: 3105-unsigned-ipa
+          path: build/3105-unsigned.ipa
           if-no-files-found: error
+          retention-days: 7
