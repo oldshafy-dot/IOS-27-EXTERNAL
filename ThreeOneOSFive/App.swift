@@ -3,214 +3,180 @@ import UIKit
 
 @main
 struct ThreeOneOSFiveApp: App {
+    var body: some Scene {
+        WindowGroup {
+            StartupGateView()
+        }
+    }
+}
+
+// MARK: - Startup Gate
+
+struct StartupGateView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var authCompleted = !KeyAuthConfiguration.enabled
+    @State private var showOnboarding = OnboardingStore.shouldShow()
+
+    var body: some View {
+        ZStack {
+            if authCompleted {
+                MainAppView(
+                    showOnboarding: $showOnboarding
+                )
+                .transition(
+                    reduceMotion
+                        ? .opacity
+                        : .opacity.combined(with: .scale(scale: 0.98))
+                )
+            } else {
+                KeyAuthView {
+                    withAnimation(
+                        reduceMotion
+                            ? nil
+                            : .easeInOut(duration: 0.2)
+                    ) {
+                        authCompleted = true
+                    }
+                }
+                .transition(
+                    reduceMotion
+                        ? .opacity
+                        : .opacity.combined(with: .scale(scale: 0.98))
+                )
+                .zIndex(2)
+            }
+        }
+    }
+}
+
+// MARK: - Main App
+
+struct MainAppView: View {
+    @Binding var showOnboarding: Bool
+
     @StateObject private var appState = AppState()
     @StateObject private var patchDraftCoordinator = PatchDraftCoordinator()
     @StateObject private var fileOperationCoordinator = FileOperationCoordinator()
     @StateObject private var patchStore = PatchProjectStore()
     @StateObject private var repositoryStore = PackageRepositoryStore()
     @StateObject private var keyAuthManager = KeyAuthManager()
-    @State private var authCompleted = !KeyAuthConfiguration.enabled
-    @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
-    @State private var showOnboarding = OnboardingStore.shouldShow()
+
     @State private var showAttribution = false
     @State private var updateOffer: AppUpdateChecker.Offer?
-    @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init() {
-        setupLogCapture()
-        log("app: 3105 launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
-    }
+    @AppStorage(AppLanguage.storageKey)
+    private var languageCode = AppLanguage.english.rawValue
+
+    @Environment(\.scenePhase)
+    private var scenePhase
+
+    @Environment(\.accessibilityReduceMotion)
+    private var reduceMotion
 
     private var language: AppLanguage {
         AppLanguage(rawValue: languageCode) ?? .english
     }
 
-    private func checkForUpdate() {
-        Task {
-            guard let offer = await AppUpdateChecker.check() else { return }
-            await MainActor.run { updateOffer = offer }
-        }
-    }
+    var body: some View {
+        ZStack {
+            ContentView()
+                .environmentObject(appState)
+                .environmentObject(patchDraftCoordinator)
+                .environmentObject(fileOperationCoordinator)
+                .environmentObject(patchStore)
+                .environmentObject(repositoryStore)
+                .environmentObject(keyAuthManager)
+                .environment(\.appLanguage, language)
+                .environment(\.locale, language.locale)
+                .opacity(showOnboarding ? 0 : 1)
+                .allowsHitTesting(!showOnboarding)
 
-    var body: some Scene {
-        WindowGroup {
-            ZStack {
-                ContentView()
-                    .environmentObject(appState)
-                    .environmentObject(patchDraftCoordinator)
-                    .environmentObject(fileOperationCoordinator)
-                    .environmentObject(patchStore)
-                    .environmentObject(repositoryStore)
-                    .environmentObject(keyAuthManager)
-                    .environment(\.appLanguage, language)
-                    .environment(\.locale, language.locale)
-                    .opacity((showOnboarding || !authCompleted) ? 0 : 1)
-                    .allowsHitTesting(!showOnboarding && authCompleted)
+            if showOnboarding {
+                OnboardingView {
+                    OnboardingStore.markCompleted()
 
-                if !authCompleted {
-                    KeyAuthView {
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                            authCompleted = true
-                        }
-                        appState.detectSupport()
-                        checkForUpdate()
-                    }
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
-                    .zIndex(2)
-                } else if showOnboarding {
-                    OnboardingView {
-                        OnboardingStore.markCompleted()
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
-                            showOnboarding = false
-                        }
-                        appState.detectSupport()
-                        checkForUpdate()
-                    }
-                    .environment(\.appLanguage, language)
-                    .environment(\.locale, language.locale)
-                    .transition(
+                    withAnimation(
                         reduceMotion
-                            ? .opacity
-                            : .opacity.combined(with: .scale(scale: 0.98))
-                    )
-                    .zIndex(1)
-                }
-            }
-            .displayIdentityAttribution(isPresented: $showAttribution, enabled: !showOnboarding && authCompleted)
-            .sheet(isPresented: $showAttribution) {
-                DisplayAttributionSheet()
-            }
-            .alert(item: $updateOffer) { offer in
-                Alert(
-                    title: Text(language.text("update.title")),
-                    message: Text(language.text("update.message", offer.version)),
-                    primaryButton: .default(Text(language.text("update.agree"))) {
-                        UIApplication.shared.open(offer.url)
-                    },
-                    secondaryButton: .cancel(Text(language.text("update.dismiss"))) {
-                        AppUpdateChecker.dismiss(version: offer.version)
+                            ? nil
+                            : .easeInOut(duration: 0.24)
+                    ) {
+                        showOnboarding = false
                     }
-                )
-            }
-            .onAppear {
-                if authCompleted && !showOnboarding {
+
                     appState.detectSupport()
                     checkForUpdate()
                 }
+                .environment(\.appLanguage, language)
+                .environment(\.locale, language.locale)
+                .transition(
+                    reduceMotion
+                        ? .opacity
+                        : .opacity.combined(with: .scale(scale: 0.98))
+                )
+                .zIndex(1)
             }
-            .onChange(of: scenePhase) { phase in
-                guard phase == .active, !showOnboarding, authCompleted else { return }
+        }
+        .displayIdentityAttribution(
+            isPresented: $showAttribution,
+            enabled: !showOnboarding
+        )
+        .sheet(isPresented: $showAttribution) {
+            DisplayAttributionSheet()
+        }
+        .alert(item: $updateOffer) { offer in
+            Alert(
+                title: Text(
+                    language.text("update.title")
+                ),
+                message: Text(
+                    language.text(
+                        "update.message",
+                        offer.version
+                    )
+                ),
+                primaryButton: .default(
+                    Text(language.text("update.agree"))
+                ) {
+                    UIApplication.shared.open(offer.url)
+                },
+                secondaryButton: .cancel(
+                    Text(language.text("update.dismiss"))
+                ) {
+                    AppUpdateChecker.dismiss(
+                        version: offer.version
+                    )
+                }
+            )
+        }
+        .onAppear {
+            setupLogCapture()
+
+            if !showOnboarding {
                 appState.detectSupport()
-            }
-            .onOpenURL { url in
-                patchDraftCoordinator.presentImport(url)
+                checkForUpdate()
             }
         }
-    }
-}
+        .onChange(of: scenePhase) { phase in
+            guard phase == .active else { return }
+            guard !showOnboarding else { return }
 
-class AppState: ObservableObject {
-    @Published var exploitStatus: ExploitStatus = .notStarted
-    @Published var unsupportedMessage: String?
-    @Published var kernelExploitRunning = false
-
-    private var autoRunAttempted = false
-
-    var kernelExploitApplicable: Bool {
-        KernelExploit.isApplicable(
-            major: AppInfo.versionTuple.major,
-            minor: AppInfo.versionTuple.minor,
-            patch: AppInfo.versionTuple.patch,
-            build: AppInfo.osBuild
-        )
-    }
-
-    var isSupported: Bool { unsupportedMessage == nil }
-
-    func detectSupport() {
-        let v = AppInfo.versionTuple
-        let supported = ExploitSupportPolicy.isSupported(
-            major: v.major,
-            minor: v.minor,
-            patch: v.patch,
-            build: AppInfo.osBuild
-        )
-#if targetEnvironment(simulator)
-        if ProcessInfo.processInfo.arguments.contains("--simulate-access") {
-            exploitStatus = .success(method: "Simulator preview")
+            appState.detectSupport()
         }
-#endif
-
-        unsupportedMessage = supported ? nil : "iOS \(AppInfo.osVersion) (\(AppInfo.osBuild))"
-        if let unsupportedMessage {
-            exploitStatus = .unsupported(unsupportedMessage)
-            return
+        .onOpenURL { url in
+            patchDraftCoordinator.presentImport(url)
         }
-
-        let applicable = KernelExploit.isApplicable(
-            major: v.major,
-            minor: v.minor,
-            patch: v.patch,
-            build: AppInfo.osBuild
-        )
-        guard applicable else { return }
-
-        refreshKernelExploitStatus()
-        maybeAutoRunKernelExploit()
     }
 
-    private func maybeAutoRunKernelExploit() {
-        guard !kernelExploitRunning,
-              !exploitStatus.isSuccess,
-              !exploitStatus.isFailed,
-              !autoRunAttempted else { return }
-        autoRunAttempted = true
-        log("app: starting kernel exploit automatically")
-        runKernelExploitIfNeeded()
-    }
-
-    private func refreshKernelExploitStatus() {
-        guard !kernelExploitRunning else { return }
-
-        // iOS < 26: kernel R/W success persists (no sandbox probe)
-        // iOS >= 26: verify full sandbox escape is still active
-        if KernelExploit.requiresSandboxEscape {
-            if KernelExploit.hasSandboxAccess() {
-                if !exploitStatus.isSuccess {
-                    exploitStatus = .success(method: "kexploit")
-                    log("app: existing sandbox access is still active; skipping kernel exploit")
-                }
-            } else if exploitStatus.isSuccess {
-                exploitStatus = .notStarted
-                log("app: sandbox access is no longer active")
+    private func checkForUpdate() {
+        Task {
+            guard let offer = await AppUpdateChecker.check()
+            else {
+                return
             }
-        }
-    }
 
-    func runKernelExploitIfNeeded() {
-        refreshKernelExploitStatus()
-        guard !kernelExploitRunning,
-              !exploitStatus.isSuccess,
-              !exploitStatus.isFailed else { return }
-        kernelExploitRunning = true
-        exploitStatus = .notStarted
-        log("app: running kernel exploit on background...")
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ok = KernelExploit.run()
-            DispatchQueue.main.async {
-                self.kernelExploitRunning = false
-                if ok {
-                    self.exploitStatus = .success(method: "kexploit")
-                    if KernelExploit.requiresSandboxEscape {
-                        log("app: kernel exploit success — sandbox access verified")
-                    } else {
-                        log("app: kernel exploit success — kernel access active")
-                    }
-                } else {
-                    self.exploitStatus = .failed(method: "kexploit", code: -1)
-                    log("app: kernel exploit failed — relaunch the app before retrying")
-                }
+            await MainActor.run {
+                updateOffer = offer
             }
         }
     }
