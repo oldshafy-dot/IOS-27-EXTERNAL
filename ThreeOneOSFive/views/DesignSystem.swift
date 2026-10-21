@@ -1,24 +1,22 @@
-// MARK: - Key authentication configuration
+
+import Foundation
+import CryptoKit
+import Security
 
 enum KeyAuthConfiguration {
     static let enabled = true
     static let demoMode = false
 
-    static let baseURL = URL(
-        string: "https://c--46026e77-f295-431b-b24d-5d0b34c299d0-prod.lovable.cloud"
-    )!
+    static let baseURL =
+        "https://c--46026e77-f295-431b-b24d-5d0b34c299d0-prod.lovable.cloud"
 
     static let publishableKey =
         "sb_publishable_w4SSt67-eYUVd-YLMKMS7A_J55PowVa"
 
-    static let verificationURL = baseURL
-        .appendingPathComponent("rest")
-        .appendingPathComponent("v1")
-        .appendingPathComponent("rpc")
-        .appendingPathComponent("verify_key")
+    static let verificationURL = URL(
+        string: "\(baseURL)/rest/v1/rpc/verify_key"
+    )
 }
-
-// MARK: - Key authentication manager
 
 @MainActor
 final class KeyAuthManager: ObservableObject {
@@ -26,44 +24,37 @@ final class KeyAuthManager: ObservableObject {
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
 
-    private struct VerificationResponse: Decodable {
+    private struct Response: Decodable {
         let valid: Bool
         let error: String?
         let expires_at: String?
     }
 
     func restoreSession() {
-        // Do not trust a previous local session without server validation.
         isAuthorized = false
     }
 
     func verify(key: String) async {
-        let trimmedKey = key.trimmingCharacters(
+        let cleanedKey = key.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
 
-        guard !trimmedKey.isEmpty else {
-            errorMessage = "Please enter your access key."
+        guard !cleanedKey.isEmpty else {
+            errorMessage = "Enter your access key."
             return
         }
 
-        guard KeyAuthConfiguration.enabled else {
-            errorMessage = "Key verification is disabled."
+        guard let url = KeyAuthConfiguration.verificationURL else {
+            errorMessage = "Verification service is not configured."
             return
         }
 
         isLoading = true
-        errorMessage = nil
         isAuthorized = false
+        errorMessage = nil
+        defer { isLoading = false }
 
-        defer {
-            isLoading = false
-        }
-
-        var request = URLRequest(
-            url: KeyAuthConfiguration.verificationURL
-        )
-
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 20
         request.setValue(
@@ -77,47 +68,33 @@ final class KeyAuthManager: ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(
-                withJSONObject: [
-                    "check_key": trimmedKey
-                ]
+                withJSONObject: ["check_key": cleanedKey]
             )
 
             let (data, response) = try await URLSession.shared.data(
                 for: request
             )
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                errorMessage = "The server returned an invalid response."
+            guard let http = response as? HTTPURLResponse else {
+                errorMessage = "Invalid server response."
                 return
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
-                errorMessage = "Server verification failed (HTTP \(httpResponse.statusCode))."
+            guard (200..<300).contains(http.statusCode) else {
+                errorMessage = "Verification server error: HTTP \(http.statusCode)."
                 return
             }
 
-            let result = try JSONDecoder().decode(
-                VerificationResponse.self,
-                from: data
-            )
+            let result = try JSONDecoder().decode(Response.self, from: data)
 
             if result.valid {
                 isAuthorized = true
                 errorMessage = nil
             } else {
-                isAuthorized = false
                 errorMessage = result.error ?? "Invalid or expired key."
             }
-
-        } catch let decodingError as DecodingError {
-            isAuthorized = false
-            errorMessage = "Unexpected verification response. Check the API response format."
-            print("Key verification decoding error: \(decodingError)")
-
         } catch {
-            isAuthorized = false
-            errorMessage = "Could not connect to the verification server. Please try again."
-            print("Key verification request failed: \(error)")
+            errorMessage = "Could not verify the key. Please try again."
         }
     }
 }
