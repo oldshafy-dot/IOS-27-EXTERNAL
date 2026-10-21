@@ -161,10 +161,7 @@ struct ContentView: View {
     private func sectionContent(_ section: AppSection) -> some View {
         switch section {
         case .home:
-            GamePatchCatalogView(
-                onOpenSettings: openSettings,
-                onOpenLogs: openLogs
-            )
+            LovablePatchCatalogView()
 
         case .new:
             RepositoryNewView(
@@ -201,15 +198,23 @@ struct ContentView: View {
 
     private var tabSelection: Binding<Int> {
         Binding(
-            get: { tabNavigation.selectedTab },
-            set: { tabNavigation.select($0) }
+            get: {
+                tabNavigation.selectedTab
+            },
+            set: {
+                tabNavigation.select($0)
+            }
         )
     }
 
     private var filesTabSession: Binding<FilesTabSession> {
         Binding(
-            get: { tabNavigation.filesTabs },
-            set: { tabNavigation.setFilesTabs($0) }
+            get: {
+                tabNavigation.filesTabs
+            },
+            set: {
+                tabNavigation.setFilesTabs($0)
+            }
         )
     }
 
@@ -249,262 +254,6 @@ struct ContentView: View {
 
     private func openLogs() {
         showLogs = true
-    }
-}
-
-private struct GamePatchCatalogView: View {
-    @Environment(\.appLanguage) private var language
-    @EnvironmentObject private var store: PackageRepositoryStore
-
-    @State private var selectedGame: GameCatalogue = .freeFire
-
-    let onOpenSettings: () -> Void
-    let onOpenLogs: () -> Void
-
-    private var matchingPackages: [RepositoryPackageRecord] {
-        store.packages.filter { record in
-            guard record.package.kind == .patch else {
-                return false
-            }
-
-            return selectedGame.matches(record)
-        }
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                gameSelector
-
-                Divider()
-
-                if store.isRefreshing && matchingPackages.isEmpty {
-                    loadingState
-                } else if matchingPackages.isEmpty {
-                    emptyState
-                } else {
-                    packageList
-                }
-            }
-            .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("Online Patches")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                AppUtilityToolbar(
-                    language: language,
-                    onOpenSettings: onOpenSettings,
-                    onOpenLogs: onOpenLogs
-                )
-            }
-            .navigationDestination(
-                for: RepositoryPackageRecord.self
-            ) { record in
-                RepositoryPackageDetailView(record: record)
-            }
-            .refreshable {
-                await store.refreshAllAndWait()
-            }
-            .onAppear {
-                store.refreshAllIfNeeded()
-            }
-        }
-    }
-
-    private var gameSelector: some View {
-        HStack(spacing: 12) {
-            gameButton(.freeFire)
-            gameButton(.freeFireMax)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity)
-        .background(Color(uiColor: .systemBackground))
-    }
-
-    private func gameButton(_ game: GameCatalogue) -> some View {
-        let isSelected = selectedGame == game
-
-        return Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                selectedGame = game
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: game.symbol)
-
-                Text(game.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .foregroundStyle(
-                isSelected ? Color.white : Color.primary
-            )
-            .background(
-                isSelected
-                    ? AppTheme.accent
-                    : Color(uiColor: .secondarySystemGroupedBackground),
-                in: RoundedRectangle(
-                    cornerRadius: 12,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: 12,
-                    style: .continuous
-                )
-                .strokeBorder(
-                    isSelected
-                        ? Color.clear
-                        : Color(uiColor: .separator).opacity(0.35),
-                    lineWidth: 1
-                )
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private var packageList: some View {
-        List {
-            Section {
-                ForEach(matchingPackages) { record in
-                    NavigationLink(value: record) {
-                        RepositoryPackageRow(record: record)
-                    }
-                }
-            } header: {
-                Text(selectedGame.title)
-            } footer: {
-                Text(
-                    "\(matchingPackages.count) online patch(es)"
-                )
-            }
-        }
-        .listStyle(.insetGrouped)
-    }
-
-    private var loadingState: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-
-            Text("Loading online patches…")
-                .font(.headline)
-
-            Text("Connecting to the configured patch repositories.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(24)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 42, weight: .light))
-                .foregroundStyle(AppTheme.accent)
-
-            Text(
-                store.isRefreshing
-                    ? "Refreshing online patches…"
-                    : "No online patches found"
-            )
-            .font(.headline)
-
-            Text(
-                store.sources.isEmpty
-                    ? "No online repository is configured. Add a valid repository in Sources."
-                    : "No published patches match this game. Pull down to refresh or check the online repository metadata."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-
-            Button {
-                store.refreshAll()
-            } label: {
-                Label(
-                    "Refresh",
-                    systemImage: "arrow.clockwise"
-                )
-            }
-            .buttonStyle(.bordered)
-            .padding(.top, 4)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(24)
-    }
-}
-
-private enum GameCatalogue: Equatable {
-    case freeFire
-    case freeFireMax
-
-    var title: String {
-        switch self {
-        case .freeFire:
-            return "Free Fire Normal"
-        case .freeFireMax:
-            return "Free Fire MAX"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .freeFire:
-            return "gamecontroller"
-        case .freeFireMax:
-            return "gamecontroller.fill"
-        }
-    }
-
-    func matches(_ record: RepositoryPackageRecord) -> Bool {
-        let package = record.package
-
-        let metadata = (
-            [
-                package.identifier,
-                package.name,
-                package.author,
-                package.summary,
-                package.details ?? "",
-                package.category ?? "",
-                record.sourceName
-            ] + package.tags
-        )
-        .joined(separator: " ")
-        .lowercased()
-        .replacingOccurrences(of: "_", with: " ")
-        .replacingOccurrences(of: "-", with: " ")
-
-        let compactMetadata = metadata.filter { $0.isLetter || $0.isNumber }
-        let mentionsFreeFire =
-            metadata.contains("free fire")
-            || compactMetadata.contains("freefire")
-            || metadata.contains("ff patch")
-            || metadata.contains("ff-patch")
-
-        guard mentionsFreeFire else {
-            return false
-        }
-
-        let mentionsMAX =
-            metadata.contains("free fire max")
-            || metadata.contains("freefire max")
-            || compactMetadata.contains("freefiremax")
-            || metadata.contains("ff max")
-
-        switch self {
-        case .freeFire:
-            return !mentionsMAX
-        case .freeFireMax:
-            return mentionsMAX
-        }
     }
 }
 
