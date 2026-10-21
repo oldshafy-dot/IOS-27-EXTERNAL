@@ -1,3 +1,4 @@
+
 import SwiftUI
 import Foundation
 import CryptoKit
@@ -108,7 +109,10 @@ struct AppLogo: View {
     var body: some View {
         Group {
             if let icon = UIImage(named: "AppIcon60x60")
-                ?? Bundle.main.path(forResource: "AppIcon60x60@2x", ofType: "png").flatMap(UIImage.init(contentsOfFile:))
+                ?? Bundle.main.path(
+                    forResource: "AppIcon60x60@2x",
+                    ofType: "png"
+                ).flatMap(UIImage.init(contentsOfFile:))
                 ?? UIImage(named: "AppIcon") {
                 Image(uiImage: icon)
                     .resizable()
@@ -122,37 +126,44 @@ struct AppLogo: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: size * 0.22,
+                style: .continuous
+            )
+        )
         .accessibilityHidden(true)
     }
 }
 
+// MARK: - Production key authentication
 
-// MARK: - Key authentication template
-
-/// Set this to `true` when the real key-verification backend is ready.
-/// The current project keeps the screen and integration point ready without
-/// forcing authentication until the backend is supplied.
 enum KeyAuthConfiguration {
-    /// Temporary local/demo mode: any non-empty key opens the app.
-    /// Set this to false when the real API is ready.
-    static let demoMode = true
-
-    /// Keep the startup auth flow enabled so the key screen is always shown.
+    static let demoMode = false
     static let enabled = true
 
-    /// Replace with the production verification endpoint later.
-    static let verificationURL = URL(string: "https://YOUR-AUTH-ENDPOINT.example/verify")
+    static let baseURL =
+        "https://c--46026e77-f295-431b-b24d-5d0b34c299d0-prod.lovable.cloud"
+
+    static let publishableAPIKey =
+        "sb_publishable_w4SSt67-eYUVd-YLMKMS7A_J55PowVa"
+
+    static let verificationURL = URL(
+        string: "\(baseURL)/rest/v1/rpc/verify_key"
+    )
 }
 
 enum DeviceBindingIdentity {
-    private static let service = "com.apple.mobile.MobileHouseArrest.key-auth"
+    private static let service =
+        "com.apple.mobile.MobileHouseArrest.key-auth"
     private static let account = "installation-id"
 
     static var fingerprint: String {
         let installationID = loadOrCreateInstallationID()
         let digest = SHA256.hash(data: Data(installationID.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        return digest.map {
+            String(format: "%02x", $0)
+        }.joined()
     }
 
     private static func loadOrCreateInstallationID() -> String {
@@ -165,7 +176,11 @@ enum DeviceBindingIdentity {
         ]
 
         var result: CFTypeRef?
-        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+
+        if SecItemCopyMatching(
+            query as CFDictionary,
+            &result
+        ) == errSecSuccess,
            let data = result as? Data,
            let value = String(data: data, encoding: .utf8),
            !value.isEmpty {
@@ -174,11 +189,15 @@ enum DeviceBindingIdentity {
 
         let value = UUID().uuidString
         let data = Data(value.utf8)
+
         var item = query
         item[kSecValueData as String] = data
         item.removeValue(forKey: kSecReturnData as String)
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        item[kSecAttrAccessible as String] =
+            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+
         SecItemAdd(item as CFDictionary, nil)
+
         return value
     }
 }
@@ -191,6 +210,12 @@ enum KeyAuthResult {
     case notConfigured
 }
 
+private struct LicenseVerificationResponse: Decodable {
+    let valid: Bool
+    let error: String?
+    let expires_at: String?
+}
+
 @MainActor
 final class KeyAuthManager: ObservableObject {
     @Published private(set) var isAuthorized = false
@@ -198,72 +223,117 @@ final class KeyAuthManager: ObservableObject {
     @Published var errorMessage: String?
 
     func restoreSession() {
-        // The real backend should return a signed/opaque session token here.
-        // This template intentionally does not auto-authorize without a backend.
+        // Do not bypass server verification by trusting a local Boolean.
         isAuthorized = false
     }
 
     func verify(key: String) async {
-        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedKey = key.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
         guard !trimmedKey.isEmpty else {
-            errorMessage = "Enter a valid key."
+            errorMessage = "Enter your license key."
             return
         }
 
         guard KeyAuthConfiguration.enabled else {
-            errorMessage = "Key verification is disabled."
+            errorMessage = "License verification is disabled."
             return
         }
 
-        // Temporary development mode: any non-empty key is accepted.
-        // The network-backed verification path below is preserved for the
-        // production API and one-key/one-device binding.
-        if KeyAuthConfiguration.demoMode {
-            isLoading = true
-            errorMessage = nil
-            defer { isLoading = false }
-            try? await Task.sleep(nanoseconds: 220_000_000)
-            isAuthorized = true
+        guard !KeyAuthConfiguration.demoMode else {
+            errorMessage = "Demo authentication must not be used."
             return
         }
 
         guard let endpoint = KeyAuthConfiguration.verificationURL else {
-            errorMessage = "Key verification endpoint is not configured yet."
+            errorMessage = "The verification endpoint is invalid."
             return
         }
 
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        isAuthorized = false
+
+        defer {
+            isLoading = false
+        }
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "key": trimmedKey,
-            "device": DeviceBindingIdentity.fingerprint
-        ])
+        request.timeoutInterval = 20
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+        request.setValue(
+            KeyAuthConfiguration.publishableAPIKey,
+            forHTTPHeaderField: "apikey"
+        )
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                errorMessage = "Verification failed."
+            request.httpBody = try JSONSerialization.data(
+                withJSONObject: [
+                    "check_key": trimmedKey
+                ]
+            )
+
+            let (data, response) = try await URLSession.shared.data(
+                for: request
+            )
+
+            guard let http = response as? HTTPURLResponse else {
+                errorMessage = "Invalid response from the server."
                 return
             }
 
-            let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let authorized = payload?["authorized"] as? Bool ?? false
-            let reason = payload?["reason"] as? String
-
-            if authorized {
-                isAuthorized = true
-            } else if reason == "already_bound" {
-                errorMessage = "This key is already linked to another device."
-            } else {
-                errorMessage = "Invalid key."
+            guard (200..<300).contains(http.statusCode) else {
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    errorMessage =
+                        "The API rejected this request. Check API permissions."
+                } else if http.statusCode == 404 {
+                    errorMessage =
+                        "The verification endpoint or database function was not found."
+                } else {
+                    errorMessage =
+                        "Verification server error (HTTP \(http.statusCode))."
+                }
+                return
             }
+
+            let result = try JSONDecoder().decode(
+                LicenseVerificationResponse.self,
+                from: data
+            )
+
+            if result.valid {
+                isAuthorized = true
+                errorMessage = nil
+            } else {
+                isAuthorized = false
+
+                switch result.error {
+                case "License expired":
+                    errorMessage = "Your license has expired."
+                case "Invalid license key":
+                    errorMessage = "Invalid license key."
+                default:
+                    errorMessage = result.error ?? "License verification failed."
+                }
+            }
+        } catch let error as DecodingError {
+            isAuthorized = false
+            errorMessage =
+                "Unexpected verification response. Check the backend response format. (\(error.localizedDescription))"
         } catch {
-            errorMessage = "Could not connect to the verification server."
+            isAuthorized = false
+            errorMessage =
+                "Could not connect to the verification server. Check your connection and try again."
         }
     }
 }
@@ -272,6 +342,7 @@ struct KeyAuthView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var authManager = KeyAuthManager()
     @State private var key = ""
+
     var onAuthorized: () -> Void
 
     var body: some View {
@@ -286,7 +357,10 @@ struct KeyAuthView: View {
                         .font(.system(size: 34, weight: .semibold))
                         .foregroundStyle(AppTheme.accent)
                         .frame(width: 72, height: 72)
-                        .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 20))
+                        .background(
+                            AppTheme.accent.opacity(0.10),
+                            in: RoundedRectangle(cornerRadius: 20)
+                        )
 
                     VStack(spacing: 7) {
                         Text("Key Verification")
@@ -304,15 +378,28 @@ struct KeyAuthView: View {
                             .autocorrectionDisabled()
                             .padding(.horizontal, 16)
                             .frame(height: 52)
-                            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .background(
+                                Color(.systemGray6),
+                                in: RoundedRectangle(
+                                    cornerRadius: 14,
+                                    style: .continuous
+                                )
+                            )
                             .overlay {
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(AppTheme.accent.opacity(0.18), lineWidth: 1)
+                                RoundedRectangle(
+                                    cornerRadius: 14,
+                                    style: .continuous
+                                )
+                                .stroke(
+                                    AppTheme.accent.opacity(0.18),
+                                    lineWidth: 1
+                                )
                             }
 
                         Button {
                             Task {
                                 await authManager.verify(key: key)
+
                                 if authManager.isAuthorized {
                                     onAuthorized()
                                 }
@@ -322,13 +409,24 @@ struct KeyAuthView: View {
                                 if authManager.isLoading {
                                     ProgressView().tint(.white)
                                 }
-                                Text(authManager.isLoading ? "Verifying…" : "Verify Key")
-                                    .fontWeight(.semibold)
+
+                                Text(
+                                    authManager.isLoading
+                                        ? "Verifying…"
+                                        : "Verify Key"
+                                )
+                                .fontWeight(.semibold)
                             }
                             .frame(maxWidth: .infinity)
                             .frame(height: 52)
                             .foregroundStyle(.white)
-                            .background(AppTheme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .background(
+                                AppTheme.accent,
+                                in: RoundedRectangle(
+                                    cornerRadius: 14,
+                                    style: .continuous
+                                )
+                            )
                         }
                         .disabled(authManager.isLoading)
                     }
@@ -342,11 +440,13 @@ struct KeyAuthView: View {
                             .padding(.horizontal, 30)
                     }
 
-                    Text("One key can be bound to one device by the verification server.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 36)
+                    Text(
+                        "Your license is checked by the verification server."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 36)
 
                     Spacer(minLength: 30)
                 }
@@ -358,6 +458,9 @@ struct KeyAuthView: View {
         .task {
             authManager.restoreSession()
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: authManager.errorMessage)
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.2),
+            value: authManager.errorMessage
+        )
     }
 }
