@@ -17,7 +17,7 @@ enum PatchImportRoute {
 
     static func resolve(_ incomingURL: URL) -> PatchImportSource {
         if incomingURL.isFileURL {
-            return incomingURL.pathExtension.lowercased() == "3105"
+            return incomingURL.pathExtension.lowercased() == "robo"
                 ? .file(incomingURL)
                 : .invalid
         }
@@ -28,12 +28,18 @@ enum PatchImportRoute {
 
         guard incomingURL.scheme?.lowercased() == urlScheme,
               incomingURL.host?.lowercased() == "import",
-              let components = URLComponents(url: incomingURL, resolvingAgainstBaseURL: false),
-              let rawRemoteURL = components.queryItems?.first(where: { $0.name == "url" })?.value,
+              let components = URLComponents(
+                  url: incomingURL,
+                  resolvingAgainstBaseURL: false
+              ),
+              let rawRemoteURL = components.queryItems?
+                  .first(where: { $0.name == "url" })?
+                  .value,
               let remoteURL = URL(string: rawRemoteURL),
               validatedRemoteURL(remoteURL) != nil else {
             return .invalid
         }
+
         return .remote(remoteURL)
     }
 
@@ -44,6 +50,7 @@ enum PatchImportRoute {
               url.password == nil else {
             return nil
         }
+
         return url
     }
 }
@@ -67,7 +74,9 @@ final class PatchDraftCoordinator: ObservableObject {
     }
 
     func presentImport(_ url: URL) {
-        importRequest = PatchImportRequest(source: PatchImportRoute.resolve(url))
+        importRequest = PatchImportRequest(
+            source: PatchImportRoute.resolve(url)
+        )
     }
 
     func clearImport() {
