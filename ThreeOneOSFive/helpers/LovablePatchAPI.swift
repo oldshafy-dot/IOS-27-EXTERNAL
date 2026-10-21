@@ -1,4 +1,3 @@
-
 import Foundation
 
 enum LovableGame: String, CaseIterable, Identifiable {
@@ -10,7 +9,7 @@ enum LovableGame: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .freeFire:
-            return "Free Fire Normal"
+            return "Free Fire"
         case .freeFireMax:
             return "Free Fire MAX"
         }
@@ -20,11 +19,11 @@ enum LovableGame: String, CaseIterable, Identifiable {
 struct LovablePatch: Decodable, Identifiable, Hashable {
     let version: String
     let downloadURL: URL
-    let filePath: String
+    let filePath: String?
     let notes: String?
 
     var id: String {
-        "\(filePath)|\(version)"
+        "\(version)-\(downloadURL.absoluteString)"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -34,62 +33,58 @@ struct LovablePatch: Decodable, Identifiable, Hashable {
         case notes
     }
 
+    init(
+        version: String,
+        downloadURL: URL,
+        filePath: String?,
+        notes: String?
+    ) {
+        self.version = version
+        self.downloadURL = downloadURL
+        self.filePath = filePath
+        self.notes = notes
+    }
+
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(
-            keyedBy: CodingKeys.self
-        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
 
-        version = try container.decode(
-            String.self,
-            forKey: .version
-        )
+        version = try container.decode(String.self, forKey: .version)
 
-        let rawURL = try container.decode(
-            String.self,
-            forKey: .downloadURL
-        )
+        let urlString = try container.decode(String.self, forKey: .downloadURL)
 
-        guard let parsedURL = URL(string: rawURL),
-              let scheme = parsedURL.scheme?.lowercased(),
-              scheme == "https",
-              parsedURL.host != nil else {
+        guard
+            let url = URL(string: urlString),
+            url.scheme?.lowercased() == "https"
+        else {
             throw DecodingError.dataCorruptedError(
                 forKey: .downloadURL,
                 in: container,
-                debugDescription: "Invalid HTTPS patch download URL."
+                debugDescription: "Download URL must use HTTPS."
             )
         }
 
-        downloadURL = parsedURL
-
-        filePath = try container.decode(
-            String.self,
-            forKey: .filePath
-        )
-
-        notes = try container.decodeIfPresent(
-            String.self,
-            forKey: .notes
-        )
+        downloadURL = url
+        filePath = try container.decodeIfPresent(String.self, forKey: .filePath)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
     }
 }
 
 enum LovablePatchAPIError: LocalizedError {
-    case invalidConfiguration
     case invalidResponse
-    case serverError(Int)
-    case invalidData
+    case httpError(Int)
+    case invalidURL
+    case missingData
 
     var errorDescription: String? {
         switch self {
-        case .invalidConfiguration:
-            return "The patch API configuration is invalid."
         case .invalidResponse:
-            return "The patch API returned an invalid response."
-        case .serverError(let status):
-            return "The patch API returned HTTP \(status)."
-        case .invalidData:
-            return "The patch catalogue contains invalid data."
+            return "The server returned an invalid response."
+        case .httpError(let status):
+            return "Server error: HTTP \(status)."
+        case .invalidURL:
+            return "The API URL is invalid."
+        case .missingData:
+            return "No active patches were found."
         }
     }
 }
@@ -103,23 +98,13 @@ final class LovablePatchAPI {
     private let publishableKey =
         "sb_publishable_w4SSt67-eYUVd-YLMKMS7A_J55PowVa"
 
-    private let session: URLSession
+    private init() {}
 
-    init(session: URLSession = .shared) {
-        self.session = session
-    }
-
-    func fetchPatches(
-        for game: LovableGame
-    ) async throws -> [LovablePatch] {
-        guard let endpoint = URL(
+    func fetchPatches(for game: LovableGame) async throws -> [LovablePatch] {
+        guard var components = URLComponents(
             string: "\(baseURL)/rest/v1/patches"
-        ),
-        var components = URLComponents(
-            url: endpoint,
-            resolvingAgainstBaseURL: false
         ) else {
-            throw LovablePatchAPIError.invalidConfiguration
+            throw LovablePatchAPIError.invalidURL
         }
 
         components.queryItems = [
@@ -132,44 +117,25 @@ final class LovablePatchAPI {
         ]
 
         guard let url = components.url else {
-            throw LovablePatchAPIError.invalidConfiguration
+            throw LovablePatchAPIError.invalidURL
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.setValue(publishableKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 25
 
-        request.setValue(
-            publishableKey,
-            forHTTPHeaderField: "apikey"
-        )
+        let (data, response) = try await URLSession.shared.data(for: request)
 
-        request.setValue(
-            "application/json",
-            forHTTPHeaderField: "Accept"
-        )
-
-        let (data, response) = try await session.data(
-            for: request
-        )
-
-        guard let http = response as? HTTPURLResponse else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw LovablePatchAPIError.invalidResponse
         }
 
-        guard (200..<300).contains(http.statusCode) else {
-            throw LovablePatchAPIError.serverError(
-                http.statusCode
-            )
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw LovablePatchAPIError.httpError(httpResponse.statusCode)
         }
 
-        do {
-            return try JSONDecoder().decode(
-                [LovablePatch].self,
-                from: data
-            )
-        } catch {
-            throw LovablePatchAPIError.invalidData
-        }
+        return try JSONDecoder().decode([LovablePatch].self, from: data)
     }
 }
