@@ -163,6 +163,82 @@ final class PatchProjectStore: ObservableObject {
         return true
     }
 
+    func installDownloadedPatchArchive(at archiveURL: URL) async throws {
+        guard !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+
+        let result = try await Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
+            let stagingRoot = fileManager.temporaryDirectory
+                .appendingPathComponent("robo-patch-update-\\(UUID().uuidString)", isDirectory: true)
+            try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+            defer { try? fileManager.removeItem(at: stagingRoot) }
+
+            let extracted = try ZIPArchiveExtractor.extract(
+                archiveURL: archiveURL,
+                into: stagingRoot,
+                fileManager: fileManager
+            )
+
+            let root = extracted.destinationURL
+            let files = try Self.patchFiles(in: root, fileManager: fileManager)
+            guard !files.isEmpty else { throw PatchPackageError.invalidProject }
+
+            for (fileURL, category) in files {
+                let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+                let summary = try PatchPackageCodec.inspect(data)
+                let decoded = try PatchPackageCodec.decode(data, password: nil)
+                let existingURL = PatchProjectLibrary.load(fileManager: fileManager)
+                    .first(where: { $0.id == summary.packageID })?.packageURL
+                let origin = PatchPackageOrigin(
+                    repositoryName: category,
+                    repositoryURL: URL(string: "https://t.me/roboios")!,
+                    packageIdentifier: fileURL.lastPathComponent
+                )
+                try PatchProjectLibrary.installImportedPackage(
+                    data: data,
+                    decoded: decoded,
+                    summary: summary,
+                    existingURL: existingURL,
+                    origin: origin,
+                    fileManager: fileManager
+                )
+            }
+            return files.count
+        }.value
+
+        reload()
+        alert = PatchStoreAlert(
+            titleKey: "common.done",
+            messageKey: "patch.imported_message",
+            messageArgument: "\\(result)"
+        )
+    }
+
+    private nonisolated static func patchFiles(
+        in root: URL,
+        fileManager: FileManager
+    ) throws -> [(URL, String)] {
+        var result: [(URL, String)] = []
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        for case let url as URL in enumerator {
+            guard url.pathExtension.lowercased() == "3105" else { continue }
+            let relative = url.path.replacingOccurrences(of: root.path + "/", with: "")
+            let parts = relative.split(separator: "/", omittingEmptySubsequences: true)
+            guard parts.count >= 2 else { continue }
+            let category = String(parts[0])
+            guard category == "FF India" || category == "BGMI" else { continue }
+            result.append((url, category))
+        }
+        return result
+    }
+
     func presentImportError(_ error: PatchPackageError) {
         present(error)
     }
