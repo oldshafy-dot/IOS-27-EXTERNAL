@@ -43,7 +43,8 @@ struct FeatureVisibility: Equatable {
     }
 
     var visibleSections: [AppSection] {
-        AppSection.allCases.filter(isVisible)
+        // The main app navigation intentionally contains only Functions and Account.
+        [.installed, .home]
     }
 
     func isVisible(_ section: AppSection) -> Bool {
