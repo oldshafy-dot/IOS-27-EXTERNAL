@@ -18,8 +18,6 @@ struct PatchProjectsView: View {
     @EnvironmentObject private var draftCoordinator: PatchDraftCoordinator
     @EnvironmentObject private var store: PatchProjectStore
     @AppStorage(FeatureVisibility.cleanerStorageKey) private var cleanerEnabled = true
-    @State private var showCreate = false
-    @State private var showImporter = false
     @State private var showWallpaperImporter = false
     @State private var showCleaner = false
     @State private var searchText = ""
@@ -97,58 +95,49 @@ struct PatchProjectsView: View {
                 )
                 Divider()
                 List {
-                    if !hasLocalContent && (store.isBusy || isImportingWallpapers) {
-                        loadingState
-                            .listRowSeparator(.hidden)
-                    } else if !hasLocalContent {
-                        emptyState
-                            .listRowSeparator(.hidden)
-                    } else if !hasSearchResults && !store.isBusy {
-                        searchEmptyState
-                            .listRowSeparator(.hidden)
-                    } else {
-                        if !filteredItems.isEmpty {
-                            Section(language.text("patch.title")) {
-                                ForEach(filteredItems) { item in
-                                    itemRow(item)
-                                }
-                                .onDelete { offsets in
-                                    offsets.map { filteredItems[$0] }.forEach(store.delete)
-                                }
+                    Section {
+                        Link(destination: URL(string: "https://t.me/roboios")!) {
+                            HStack(spacing: 10) {
+                                Image(systemName: "paperplane.fill")
+                                    .foregroundStyle(Color(red: 0.20, green: 0.68, blue: 1.0))
+                                Text("Official Telegram Channel")
+                                    .foregroundStyle(.white)
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .foregroundStyle(Color(red: 0.20, green: 0.68, blue: 1.0))
+                                    .font(.caption.weight(.semibold))
                             }
                         }
-                        if !filteredWallpaperPackages.isEmpty {
-                            Section(language.text("tab.wallpapers")) {
-                                ForEach(filteredWallpaperPackages) { package in
-                                    NavigationLink {
-                                        InstalledWallpaperPackageDetailView(
-                                            package: package,
-                                            onApplied: reloadWallpaperPackages
-                                        )
-                                    } label: {
-                                        wallpaperRow(package)
-                                    }
-                                    .swipeActions(
-                                        edge: .trailing,
-                                        allowsFullSwipe: false
-                                    ) {
-                                        Button(role: .destructive) {
-                                            wallpaperPendingDeletion = package
-                                        } label: {
-                                            Label(
-                                                language.text("common.delete"),
-                                                systemImage: "trash"
-                                            )
-                                        }
-                                    }
+                        .listRowBackground(Color.white.opacity(0.035))
+                    }
+
+                    patchCategorySection(title: "FF India", items: filteredItems.filter { $0.origin?.repositoryName == "FF India" || $0.origin == nil })
+                    patchCategorySection(title: "BGMI", items: filteredItems.filter { $0.origin?.repositoryName == "BGMI" })
+
+                    if filteredItems.filter({ $0.origin?.repositoryName == "BGMI" }).isEmpty {
+                        Section("BGMI") {
+                            Text("Coming Soon — BGMI patches will be available very soon.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 1)
+                        }
+                    }
+
+                    if !filteredWallpaperPackages.isEmpty {
+                        Section(language.text("tab.wallpapers")) {
+                            ForEach(filteredWallpaperPackages) { package in
+                                NavigationLink {
+                                    InstalledWallpaperPackageDetailView(package: package, onApplied: reloadWallpaperPackages)
+                                } label: {
+                                    wallpaperRow(package)
                                 }
                             }
                         }
                     }
+
                     if cleanerEnabled {
-                        Section(language.text("repository.utilities")) {
-                            cleanerRow
-                        }
+                        Section(language.text("repository.utilities")) { cleanerRow }
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -156,66 +145,24 @@ struct PatchProjectsView: View {
             .navigationTitle(language.text("tab.installed"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button {
-                            showCreate = true
-                        } label: {
-                            Label(language.text("patch.new"), systemImage: "doc.badge.plus")
-                        }
-                        Button {
-                            showImporter = true
-                        } label: {
-                            Label(language.text("patch.import"), systemImage: "square.and.arrow.down")
-                        }
-                        Button {
-                            showWallpaperImporter = true
-                        } label: {
-                            Label(
-                                language.text("wallpaper.import"),
-                                systemImage: "photo.badge.plus"
-                            )
-                        }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        store.restoreAllPatches()
                     } label: {
-                        if store.isBusy || isImportingWallpapers {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "plus")
-                        }
+                        Label("Restore All", systemImage: "arrow.uturn.backward.circle")
                     }
-                    .disabled(store.isBusy || isImportingWallpapers)
-                    .accessibilityLabel(language.text("patch.add"))
+                    .disabled(store.isBusy)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if store.isBusy || isImportingWallpapers {
+                        ProgressView()
+                    }
                 }
                 AppUtilityToolbar(
                     language: language,
                     onOpenSettings: onOpenSettings,
                     onOpenLogs: onOpenLogs
                 )
-            }
-            .sheet(isPresented: $showImporter) {
-                FileDocumentPicker(
-                    allowedContentTypes: PatchPackagePickerPolicy.allowedContentTypes,
-                    copiesSelectedDocument: PatchPackagePickerPolicy.copiesSelectedDocument,
-                    allowsMultipleSelection: false,
-                    onSelection: { result in
-                        showImporter = false
-                        if case .success(let urls) = result, let url = urls.first {
-                            store.importPackage(at: url)
-                        }
-                    },
-                    onCancel: {
-                        showImporter = false
-                    }
-                )
-                .ignoresSafeArea()
-            }
-            .sheet(isPresented: $showCreate) {
-                PatchProjectEditorView(
-                    existingProject: nil,
-                    passwordIsProtected: false
-                ) { project, password in
-                    store.create(project: project, password: password)
-                }
             }
             .sheet(isPresented: $showCleaner) {
                 CleanerView()
@@ -293,6 +240,23 @@ struct PatchProjectsView: View {
             }
             .onChange(of: draftCoordinator.importRequest?.id) { _ in
                 consumeExternalImport()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func patchCategorySection(title: String, items: [PatchLibraryItem]) -> some View {
+        Section(title) {
+            if items.isEmpty {
+                Text(title == "FF India" ? "No FF India patches available." : "Coming Soon — BGMI patches will be available very soon.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(items) { item in
+                    itemRow(item)
+                        .padding(.vertical, 0)
+                }
             }
         }
     }
@@ -445,9 +409,10 @@ struct PatchProjectsView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button(language.text("patch.new")) { showCreate = true }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+            Text("Patches will appear here after the required update is installed.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 64)
