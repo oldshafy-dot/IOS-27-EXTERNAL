@@ -358,6 +358,37 @@ final class PatchProjectStore: ObservableObject {
         unlockErrorKey = nil
     }
 
+    func restoreAllPatches() {
+        guard !isBusy else { return }
+        isBusy = true
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let items = PatchProjectLibrary.load()
+                var restored = 0
+                for item in items {
+                    guard let receipt = DevicePatchService.latestReceipt(projectID: item.id) else { continue }
+                    try DevicePatchService.restore(receipt: receipt, allowChangedTargets: true)
+                    restored += 1
+                }
+                await self?.finishRestoreAll(restored: restored)
+            } catch let error as PatchPackageError {
+                await self?.failOperation(error)
+            } catch {
+                await self?.failOperation(.restoreFailed)
+            }
+        }
+    }
+
+    private func finishRestoreAll(restored: Int) {
+        reload()
+        isBusy = false
+        alert = PatchStoreAlert(
+            titleKey: "common.done",
+            messageKey: "patch.restore",
+            messageArgument: "\\(restored)"
+        )
+    }
+
     func delete(_ item: PatchLibraryItem) {
         do {
             try PatchProjectLibrary.delete(item)
