@@ -78,11 +78,6 @@ struct PatchProjectsView: View {
     ) {
         self.onOpenSettings = onOpenSettings
         self.onOpenLogs = onOpenLogs
-#if targetEnvironment(simulator)
-        _showCreate = State(
-            initialValue: ProcessInfo.processInfo.arguments.contains("--simulate-patch-editor")
-        )
-#endif
     }
 
     var body: some View {
