@@ -47,6 +47,7 @@ struct MainAppView: View {
     @StateObject private var patchStore = PatchProjectStore()
     @StateObject private var repositoryStore = PackageRepositoryStore()
     @StateObject private var keyAuthManager = KeyAuthManager()
+    @StateObject private var patchUpdateManager = RequiredPatchUpdateManager()
 
     @AppStorage(AppLanguage.storageKey)
     private var languageCode = AppLanguage.english.rawValue
@@ -75,7 +76,13 @@ struct MainAppView: View {
 
     var body: some View {
         ZStack {
-            ContentView()
+            Group {
+                if patchUpdateManager.isBlocking {
+                    RequiredPatchUpdateView(manager: patchUpdateManager)
+                } else {
+                    ContentView()
+                }
+            }
                 .environmentObject(appState)
                 .environmentObject(patchDraftCoordinator)
                 .environmentObject(fileOperationCoordinator)
@@ -140,6 +147,7 @@ struct MainAppView: View {
         .onAppear {
             appState.detectSupport()
             checkForUpdate()
+            Task { await patchUpdateManager.check(patchStore: patchStore) }
         }
         .onChange(of: scenePhase) { phase in
             guard phase == .active else {
@@ -172,5 +180,176 @@ final class AppState: ObservableObject {
             patch: version.patch,
             build: AppInfo.osBuild
         )
+    }
+}
+
+
+@MainActor
+final class RequiredPatchUpdateManager: ObservableObject {
+    struct PackageInfo: Decodable {
+        let success: Bool
+        let available: Bool
+        let version: String
+        let requiredUpdate: Bool
+        let message: String
+        let fileName: String
+        let fileSize: Int64
+        let publishedAt: String?
+        let downloadURL: URL
+        let downloadURLExpiresIn: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case success, available, version, message
+            case requiredUpdate = "required_update"
+            case fileName = "file_name"
+            case fileSize = "file_size"
+            case publishedAt = "published_at"
+            case downloadURL = "download_url"
+            case downloadURLExpiresIn = "download_url_expires_in"
+        }
+    }
+
+    @Published private(set) var isBlocking = false
+    @Published private(set) var isWorking = false
+    @Published private(set) var version = ""
+    @Published private(set) var message = "A required patch update is available."
+    @Published private(set) var errorMessage: String?
+
+    private let endpoint = URL(string: "https://shafaykeyauthadmin.lovable.app/api/public/v1/patch/latest")!
+    private let installedVersionKey = "robo.requiredPatch.installedVersion"
+
+    func check(patchStore: PatchProjectStore) async {
+        guard !isWorking else { return }
+        do {
+            let info = try await fetchPackage()
+            guard info.success, info.available, info.requiredUpdate else {
+                isBlocking = false
+                return
+            }
+
+            let installed = UserDefaults.standard.string(forKey: installedVersionKey)
+            guard installed != info.version else {
+                isBlocking = false
+                return
+            }
+
+            version = info.version
+            message = info.message
+            errorMessage = nil
+            isBlocking = true
+        } catch {
+            // Do not block the user when the update service is temporarily unreachable.
+            isBlocking = false
+        }
+    }
+
+    func install(patchStore: PatchProjectStore) async {
+        guard !isWorking else { return }
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
+
+        do {
+            let info = try await fetchPackage()
+            guard info.success, info.available, info.requiredUpdate else {
+                isBlocking = false
+                return
+            }
+
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 60
+            configuration.timeoutIntervalForResource = 900
+            let session = URLSession(configuration: configuration)
+            defer { session.invalidateAndCancel() }
+
+            let (temporaryURL, response) = try await session.download(from: info.downloadURL)
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                throw UpdateError.downloadFailed
+            }
+
+            try await patchStore.installDownloadedPatchArchive(at: temporaryURL)
+            UserDefaults.standard.set(info.version, forKey: installedVersionKey)
+            version = info.version
+            isBlocking = false
+        } catch {
+            errorMessage = "Download or installation failed. Please try again."
+        }
+    }
+
+    private func fetchPackage() async throws -> PackageInfo {
+        var request = URLRequest(url: endpoint)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 30
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            throw UpdateError.requestFailed
+        }
+        return try JSONDecoder().decode(PackageInfo.self, from: data)
+    }
+
+    enum UpdateError: Error {
+        case requestFailed
+        case downloadFailed
+    }
+}
+
+struct RequiredPatchUpdateView: View {
+    @ObservedObject var manager: RequiredPatchUpdateManager
+    @EnvironmentObject private var patchStore: PatchProjectStore
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 58))
+                    .foregroundStyle(Color(red: 0.20, green: 0.68, blue: 1.0))
+
+                Text("Required Update")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text(manager.version.isEmpty ? "A new patch package is required." : "Version \(manager.version) is required to continue.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .multilineTextAlignment(.center)
+
+                if !manager.message.isEmpty {
+                    Text(manager.message)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.60))
+                        .multilineTextAlignment(.center)
+                }
+
+                if let error = manager.errorMessage {
+                    Text(error)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
+
+                Button {
+                    Task { await manager.install(patchStore: patchStore) }
+                } label: {
+                    HStack(spacing: 10) {
+                        if manager.isWorking {
+                            ProgressView().tint(.white)
+                        }
+                        Text(manager.isWorking ? "Installing..." : "Download & Install")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(red: 0.12, green: 0.45, blue: 0.90), in: RoundedRectangle(cornerRadius: 12))
+                    .foregroundStyle(.white)
+                }
+                .disabled(manager.isWorking)
+            }
+            .padding(28)
+        }
     }
 }
